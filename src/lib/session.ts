@@ -5,6 +5,7 @@ const secret = new TextEncoder().encode(process.env.SESSION_SECRET!);
 export type SessionPayload = {
   codigo: string;
   nombre: string;
+  rut: string | null;
   rol: "vendedor" | "jefe" | "administrador";
 };
 
