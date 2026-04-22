@@ -5,7 +5,8 @@ import { verifySessionToken } from "../../../lib/session";
 export async function GET() {
   try {
     const cookieStore = await cookies();
-const token = cookieStore.get("rta_session")?.value;
+    const token = cookieStore.get("rta_session")?.value;
+
     if (!token) {
       return NextResponse.json({ user: null });
     }
@@ -16,6 +17,7 @@ const token = cookieStore.get("rta_session")?.value;
       user: {
         codigo: payload.codigo,
         nombre: payload.nombre,
+        rut: payload.rut ?? null,
         rol: payload.rol,
       },
     });
