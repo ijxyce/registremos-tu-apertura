@@ -16,7 +16,7 @@ export async function POST(req: Request) {
 
     const { data, error } = await supabaseAdmin
       .from("usuarios")
-      .select("codigo_vendedor, nombre, rol, pin_hash, activo")
+      .select("codigo_vendedor, nombre, rut, rol, pin_hash, activo")
       .eq("codigo_vendedor", codigo)
       .maybeSingle();
 
@@ -46,6 +46,7 @@ export async function POST(req: Request) {
     const token = await createSessionToken({
       codigo: data.codigo_vendedor,
       nombre: data.nombre,
+      rut: data.rut ?? null,
       rol: data.rol,
     });
 
@@ -54,16 +55,19 @@ export async function POST(req: Request) {
       user: {
         codigo: data.codigo_vendedor,
         nombre: data.nombre,
+        rut: data.rut ?? null,
         rol: data.rol,
       },
     });
 
     res.cookies.set("rta_session", token, {
-  httpOnly: true,
-  secure: false, // 👈 importante en localhost
-  sameSite: "lax",
-  path: "/",
-});
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "lax",
+      path: "/",
+      maxAge: 60 * 60 * 24 * 7,
+    });
+
     return res;
   } catch {
     return NextResponse.json(

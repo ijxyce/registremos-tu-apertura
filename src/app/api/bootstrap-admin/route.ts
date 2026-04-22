@@ -2,6 +2,10 @@ import { NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { supabaseAdmin } from "../../../lib/supabase-admin";
 
+function cleanRut(value: string) {
+  return value.replace(/[^0-9kK]/g, "").toUpperCase();
+}
+
 export async function GET() {
   const { count, error } = await supabaseAdmin
     .from("usuarios")
@@ -33,9 +37,9 @@ export async function POST(req: Request) {
       );
     }
 
-    const { codigo_vendedor, nombre, pin } = await req.json();
+    const { codigo_vendedor, nombre, rut, pin } = await req.json();
 
-    if (!codigo_vendedor || !nombre || !pin) {
+    if (!codigo_vendedor || !nombre || !rut || !pin) {
       return NextResponse.json({ error: "Faltan datos." }, { status: 400 });
     }
 
@@ -52,6 +56,7 @@ export async function POST(req: Request) {
       {
         codigo_vendedor,
         nombre,
+        rut: cleanRut(rut),
         rol: "administrador",
         pin_hash,
         activo: true,

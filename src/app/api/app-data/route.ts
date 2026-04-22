@@ -4,9 +4,14 @@ import { verifySessionToken } from "../../../lib/session";
 import { supabaseAdmin } from "../../../lib/supabase-admin";
 
 type TipoActividad = "CMR" | "CUENTA_CORRIENTE" | "ESCANEO";
+type TipoSeguro = "COMPRA_PROTEGIDA" | "SEGURO_VIDA";
 
 function isApertura(tipo: TipoActividad) {
   return tipo === "CMR" || tipo === "CUENTA_CORRIENTE";
+}
+
+function isSeguro(tipo: TipoSeguro) {
+  return tipo === "COMPRA_PROTEGIDA" || tipo === "SEGURO_VIDA";
 }
 
 function getChileDateString(date = new Date()) {
@@ -39,23 +44,36 @@ export async function GET() {
     if (!token) {
       return NextResponse.json({
         user: null,
-        registros: [],
-        ranking: [],
+        aperturas: [],
+        seguros: [],
+        rankingAperturas: [],
+        rankingSeguros: [],
         usuarios: [],
       });
     }
 
     const session = await verifySessionToken(token);
 
-    const { data: registros, error } = await supabaseAdmin
+    const { data: aperturas, error: aperturasError } = await supabaseAdmin
       .from("aperturas")
       .select(
-        "id, codigo_vendedor, nombre_vendedor, rol_vendedor, rut_cliente, fecha, tipo, valor, detalle"
+        "id, codigo_vendedor, nombre_vendedor, rol_vendedor, rut_vendedor, rut_cliente, fecha, tipo, valor, detalle"
       )
       .order("fecha", { ascending: false });
 
-    if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 });
+    if (aperturasError) {
+      return NextResponse.json({ error: aperturasError.message }, { status: 500 });
+    }
+
+    const { data: seguros, error: segurosError } = await supabaseAdmin
+      .from("seguros")
+      .select(
+        "id, codigo_vendedor, nombre_vendedor, rol_vendedor, rut_vendedor, rut_cliente, fecha, tipo, valor, detalle"
+      )
+      .order("fecha", { ascending: false });
+
+    if (segurosError) {
+      return NextResponse.json({ error: segurosError.message }, { status: 500 });
     }
 
     const hoyChile = getChileDateString();
@@ -63,32 +81,59 @@ export async function GET() {
     const inicioChile = `${hoyChile}T00:00:00${offset}`;
     const finChile = `${hoyChile}T23:59:59${offset}`;
 
-    const { data: rankingData, error: rankingError } = await supabaseAdmin
+    const { data: rankingAperturasRaw, error: rankingAperturasError } = await supabaseAdmin
       .from("aperturas")
       .select("codigo_vendedor, nombre_vendedor, tipo, fecha")
       .gte("fecha", inicioChile)
       .lte("fecha", finChile);
 
-    if (rankingError) {
-      return NextResponse.json({ error: rankingError.message }, { status: 500 });
+    if (rankingAperturasError) {
+      return NextResponse.json({ error: rankingAperturasError.message }, { status: 500 });
     }
 
-    const agrupado = new Map<string, { nombre: string; total: number }>();
+    const { data: rankingSegurosRaw, error: rankingSegurosError } = await supabaseAdmin
+      .from("seguros")
+      .select("codigo_vendedor, nombre_vendedor, tipo, fecha")
+      .gte("fecha", inicioChile)
+      .lte("fecha", finChile);
 
-    (rankingData ?? []).forEach((item: any) => {
+    if (rankingSegurosError) {
+      return NextResponse.json({ error: rankingSegurosError.message }, { status: 500 });
+    }
+
+    const agrupadoAperturas = new Map<string, { nombre: string; total: number }>();
+    (rankingAperturasRaw ?? []).forEach((item: any) => {
       if (!isApertura(item.tipo)) return;
-
       const key = item.codigo_vendedor;
-      const actual = agrupado.get(key) ?? {
+      const actual = agrupadoAperturas.get(key) ?? {
         nombre: item.nombre_vendedor ?? item.codigo_vendedor,
         total: 0,
       };
-
       actual.total += 1;
-      agrupado.set(key, actual);
+      agrupadoAperturas.set(key, actual);
     });
 
-    const ranking = Array.from(agrupado.entries())
+    const rankingAperturas = Array.from(agrupadoAperturas.entries())
+      .map(([codigo_vendedor, value]) => ({
+        codigo_vendedor,
+        nombre_vendedor: value.nombre,
+        total: value.total,
+      }))
+      .sort((a, b) => b.total - a.total);
+
+    const agrupadoSeguros = new Map<string, { nombre: string; total: number }>();
+    (rankingSegurosRaw ?? []).forEach((item: any) => {
+      if (!isSeguro(item.tipo)) return;
+      const key = item.codigo_vendedor;
+      const actual = agrupadoSeguros.get(key) ?? {
+        nombre: item.nombre_vendedor ?? item.codigo_vendedor,
+        total: 0,
+      };
+      actual.total += 1;
+      agrupadoSeguros.set(key, actual);
+    });
+
+    const rankingSeguros = Array.from(agrupadoSeguros.entries())
       .map(([codigo_vendedor, value]) => ({
         codigo_vendedor,
         nombre_vendedor: value.nombre,
@@ -101,7 +146,7 @@ export async function GET() {
     if (session.rol === "administrador") {
       const { data: usuariosData, error: usuariosError } = await supabaseAdmin
         .from("usuarios")
-        .select("id, codigo_vendedor, nombre, rol, activo, created_at")
+        .select("id, codigo_vendedor, nombre, rut, rol, activo, created_at")
         .order("nombre");
 
       if (usuariosError) {
@@ -115,17 +160,22 @@ export async function GET() {
       user: {
         codigo: session.codigo,
         nombre: session.nombre,
+        rut: session.rut ?? null,
         rol: session.rol,
       },
-      registros: registros ?? [],
-      ranking,
+      aperturas: aperturas ?? [],
+      seguros: seguros ?? [],
+      rankingAperturas,
+      rankingSeguros,
       usuarios,
     });
   } catch {
     return NextResponse.json({
       user: null,
-      registros: [],
-      ranking: [],
+      aperturas: [],
+      seguros: [],
+      rankingAperturas: [],
+      rankingSeguros: [],
       usuarios: [],
     });
   }
