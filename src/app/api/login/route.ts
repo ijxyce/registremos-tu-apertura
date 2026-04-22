@@ -59,13 +59,11 @@ export async function POST(req: Request) {
     });
 
     res.cookies.set("rta_session", token, {
-      httpOnly: true,
-      secure: false,
-      sameSite: "lax",
-      path: "/",
-      maxAge: 60 * 60 * 24 * 7,
-    });
-
+  httpOnly: true,
+  secure: false, // 👈 importante en localhost
+  sameSite: "lax",
+  path: "/",
+});
     return res;
   } catch {
     return NextResponse.json(

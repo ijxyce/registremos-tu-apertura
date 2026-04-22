@@ -1,12 +1,11 @@
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
-import { verifySessionToken } from "@/lib/session";
+import { verifySessionToken } from "../../../lib/session";
 
 export async function GET() {
   try {
     const cookieStore = await cookies();
-    const token = cookieStore.get("rta_session")?.value;
-
+const token = cookieStore.get("rta_session")?.value;
     if (!token) {
       return NextResponse.json({ user: null });
     }

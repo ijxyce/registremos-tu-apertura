@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { useEffect, useMemo, useState } from "react";
 
 type Vista = "dashboard" | "mis_registros" | "metas" | "exportar" | "panel_jefe" | "admin";
@@ -52,6 +53,11 @@ type NivelInfo = {
 const META_DIARIA_APERTURAS = 8;
 const META_SEMANAL_APERTURAS = 30;
 
+const inputClass =
+  "w-full bg-white border border-[#cfe0c4] rounded-2xl px-4 py-4 outline-none text-[#111827] placeholder:text-[#6b7280] text-base";
+const selectClass =
+  "w-full bg-white border border-[#cfe0c4] rounded-2xl px-4 py-4 outline-none text-[#111827] text-base";
+
 const TIPOS_CONFIG: Record<
   TipoActividad,
   {
@@ -67,7 +73,7 @@ const TIPOS_CONFIG: Record<
   CMR: {
     label: "Apertura CMR",
     detalle: "Apertura CMR",
-    color: "text-[#1f7a1f]",
+    color: "text-[#14532d]",
     bg: "bg-[#edf8e8]",
     border: "border-[#9ed48d]",
     activeBg: "bg-[#2fa11b]",
@@ -305,29 +311,50 @@ export default function Page() {
   const cargarApp = async () => {
     setError("");
 
-    const res = await fetch("/api/app-data", {
+    const sessionRes = await fetch("/api/session", {
       method: "GET",
       cache: "no-store",
     });
 
-    let data: any = {};
+    let sessionData: any = {};
     try {
-      data = await res.json();
+      sessionData = await sessionRes.json();
     } catch {
-      data = {};
+      sessionData = {};
     }
 
-    if (!res.ok) {
-      setError(data.error || "Error al cargar la app.");
+    if (!sessionRes.ok) {
+      setError("No se pudo validar la sesión.");
       return false;
     }
 
-    setUser(data.user ?? null);
-    setRegistros(data.registros ?? []);
-    setRanking(data.ranking ?? []);
-    setUsuarios(data.usuarios ?? []);
+    setUser(sessionData.user ?? null);
 
-    return true;
+    const appRes = await fetch("/api/app-data", {
+      method: "GET",
+      cache: "no-store",
+    });
+
+    let appData: any = {};
+    try {
+      appData = await appRes.json();
+    } catch {
+      appData = {};
+    }
+
+    if (!appRes.ok) {
+      setError(appData.error || "Error al cargar la información.");
+      setRegistros([]);
+      setRanking([]);
+      setUsuarios([]);
+      return Boolean(sessionData.user);
+    }
+
+    setRegistros(appData.registros ?? []);
+    setRanking(appData.ranking ?? []);
+    setUsuarios(appData.usuarios ?? []);
+
+    return Boolean(sessionData.user);
   };
 
   useEffect(() => {
@@ -460,15 +487,10 @@ export default function Page() {
       return;
     }
 
-    const ok = await cargarApp();
-
-    if (!ok) {
-      setError("La sesión se creó, pero no se pudo cargar la app.");
-      return;
-    }
-
     setCodigoLogin("");
     setPinLogin("");
+
+    await cargarApp();
   };
 
   const handleLogout = async () => {
@@ -595,94 +617,105 @@ export default function Page() {
   if (!user) {
     return (
       <main className="min-h-screen bg-gradient-to-br from-[#f3f8ef] via-white to-[#eef7ea] flex items-center justify-center p-4">
-        <div className="w-full max-w-md bg-white rounded-[28px] shadow-xl p-6 border border-[#dfe8d8]">
-          <div className="text-center mb-6">
-            <p className="text-xs uppercase tracking-[0.25em] text-[#7a8c72]">
-              Sistema comercial
-            </p>
-            <h1 className="text-3xl font-bold text-[#2d5d22] mt-3">
+        <div className="w-full max-w-4xl bg-white rounded-[32px] shadow-xl p-6 md:p-10 border border-[#dfe8d8]">
+          <div className="max-w-xl mx-auto text-center">
+            <div className="flex justify-center mb-4">
+              <Image
+                src="/logo-rta.png"
+                alt="Logo Registremos Tu Apertura"
+                width={180}
+                height={180}
+                className="w-32 h-32 md:w-44 md:h-44 object-contain"
+                priority
+              />
+            </div>
+
+            <h1 className="text-4xl md:text-6xl font-bold text-[#14532d] leading-tight">
               Registremos Tu Apertura
             </h1>
-            <p className="text-[#687761] mt-3">
+
+            <p className="text-[#4b5563] text-xl md:text-2xl mt-5">
               Acceso con código y PIN de 4 dígitos
             </p>
+
+            {error && (
+              <div className="mt-5 bg-red-50 border border-red-200 text-red-700 rounded-2xl p-4 text-sm">
+                {error}
+              </div>
+            )}
+
+            {mensaje && (
+              <div className="mt-5 bg-green-50 border border-green-200 text-green-700 rounded-2xl p-4 text-sm">
+                {mensaje}
+              </div>
+            )}
+
+            <div className="mt-8 space-y-5">
+              {bootstrapNeeded ? (
+                <>
+                  <input
+                    type="text"
+                    value={bootstrapCodigo}
+                    onChange={(e) => setBootstrapCodigo(e.target.value)}
+                    placeholder="Código vendedor"
+                    className={inputClass}
+                  />
+
+                  <input
+                    type="text"
+                    value={bootstrapNombre}
+                    onChange={(e) => setBootstrapNombre(e.target.value)}
+                    placeholder="Nombre completo"
+                    className={inputClass}
+                  />
+
+                  <input
+                    type="password"
+                    value={bootstrapPin}
+                    onChange={(e) => setBootstrapPin(e.target.value.replace(/\D/g, "").slice(0, 4))}
+                    placeholder="PIN 4 dígitos"
+                    className={inputClass}
+                  />
+
+                  <button
+                    onClick={crearBootstrapAdmin}
+                    className="w-full bg-[#2b8a1f] hover:bg-[#236f19] text-white rounded-2xl py-4 font-semibold text-xl"
+                  >
+                    Crear administrador
+                  </button>
+                </>
+              ) : (
+                <>
+                  <input
+                    type="text"
+                    value={codigoLogin}
+                    onChange={(e) => setCodigoLogin(e.target.value)}
+                    placeholder="Código vendedor"
+                    className={inputClass}
+                  />
+
+                  <input
+                    type="password"
+                    value={pinLogin}
+                    onChange={(e) => setPinLogin(e.target.value.replace(/\D/g, "").slice(0, 4))}
+                    placeholder="PIN 4 dígitos"
+                    className={inputClass}
+                  />
+
+                  <button
+                    onClick={handleLogin}
+                    className="w-full bg-[#2b8a1f] hover:bg-[#236f19] text-white rounded-2xl py-4 font-semibold text-xl"
+                  >
+                    Ingresar
+                  </button>
+                </>
+              )}
+            </div>
+
+            <footer className="text-center text-sm text-[#6b7280] pt-8">
+              Creada por <span className="font-semibold text-[#166534]">Joyce Garcia</span> · @ijxyce
+            </footer>
           </div>
-
-          {error && (
-            <div className="mb-4 bg-red-50 border border-red-200 text-red-700 rounded-2xl p-3 text-sm">
-              {error}
-            </div>
-          )}
-
-          {mensaje && (
-            <div className="mb-4 bg-green-50 border border-green-200 text-green-700 rounded-2xl p-3 text-sm">
-              {mensaje}
-            </div>
-          )}
-
-          {bootstrapNeeded ? (
-            <div className="space-y-4">
-              <p className="text-sm font-semibold text-[#2d5d22]">
-                Crear administrador inicial
-              </p>
-
-              <input
-                type="text"
-                value={bootstrapCodigo}
-                onChange={(e) => setBootstrapCodigo(e.target.value)}
-                placeholder="Código vendedor"
-                className="w-full border border-[#cfe0c4] rounded-2xl px-4 py-3 outline-none"
-              />
-
-              <input
-                type="text"
-                value={bootstrapNombre}
-                onChange={(e) => setBootstrapNombre(e.target.value)}
-                placeholder="Nombre completo"
-                className="w-full border border-[#cfe0c4] rounded-2xl px-4 py-3 outline-none"
-              />
-
-              <input
-                type="password"
-                value={bootstrapPin}
-                onChange={(e) => setBootstrapPin(e.target.value.replace(/\D/g, "").slice(0, 4))}
-                placeholder="PIN 4 dígitos"
-                className="w-full border border-[#cfe0c4] rounded-2xl px-4 py-3 outline-none"
-              />
-
-              <button
-                onClick={crearBootstrapAdmin}
-                className="w-full bg-[#2b8a1f] hover:bg-[#236f19] text-white rounded-2xl py-4 font-semibold text-lg"
-              >
-                Crear administrador
-              </button>
-            </div>
-          ) : (
-            <div className="space-y-4">
-              <input
-                type="text"
-                value={codigoLogin}
-                onChange={(e) => setCodigoLogin(e.target.value)}
-                placeholder="Código vendedor"
-                className="w-full border border-[#cfe0c4] rounded-2xl px-4 py-3 outline-none"
-              />
-
-              <input
-                type="password"
-                value={pinLogin}
-                onChange={(e) => setPinLogin(e.target.value.replace(/\D/g, "").slice(0, 4))}
-                placeholder="PIN 4 dígitos"
-                className="w-full border border-[#cfe0c4] rounded-2xl px-4 py-3 outline-none"
-              />
-
-              <button
-                onClick={handleLogin}
-                className="w-full bg-[#2b8a1f] hover:bg-[#236f19] text-white rounded-2xl py-4 font-semibold text-lg"
-              >
-                Ingresar
-              </button>
-            </div>
-          )}
         </div>
       </main>
     );
@@ -726,7 +759,7 @@ export default function Page() {
 
       <div className="grid xl:grid-cols-[1.15fr_1fr] gap-6">
         <div className="bg-white rounded-[28px] p-5 md:p-6 shadow-sm border border-[#e7ece2]">
-          <h2 className="text-2xl md:text-3xl font-bold text-[#222] mb-5">Registrar actividad</h2>
+          <h2 className="text-2xl md:text-3xl font-bold text-[#111827] mb-5">Registrar actividad</h2>
 
           <div>
             <p className="text-sm font-medium text-[#566555] mb-3">Selecciona el tipo</p>
@@ -763,7 +796,7 @@ export default function Page() {
           </div>
 
           <div className="mt-5">
-            <label className="block text-sm font-medium text-[#566555] mb-2">
+            <label className="block text-sm font-medium text-[#374151] mb-2">
               RUT del cliente {tipoSeleccionado === "ESCANEO" ? "(opcional)" : ""}
             </label>
             <input
@@ -771,7 +804,7 @@ export default function Page() {
               value={rutCliente}
               onChange={(e) => setRutCliente(formatRut(e.target.value))}
               placeholder="12.345.678-5"
-              className="w-full bg-[#fafcf8] border border-[#d1ddd0] rounded-2xl px-4 py-4 outline-none focus:ring-2 focus:ring-[#39b11c]"
+              className={inputClass}
             />
           </div>
 
@@ -792,7 +825,7 @@ export default function Page() {
         <div className="bg-white rounded-[28px] p-5 md:p-6 shadow-sm border border-[#e7ece2]">
           <div className="flex items-center justify-between mb-5">
             <div>
-              <h2 className="text-2xl md:text-3xl font-bold text-[#222]">Ranking diario</h2>
+              <h2 className="text-2xl md:text-3xl font-bold text-[#111827]">Ranking diario</h2>
               <p className="text-[#62725b] mt-1">Solo aperturas</p>
             </div>
           </div>
@@ -817,7 +850,7 @@ export default function Page() {
                           {getMedal(index)}
                         </div>
                         <div className="min-w-0">
-                          <div className="font-semibold text-[#2f4f24] truncate">
+                          <div className="font-semibold text-[#1f2937] truncate">
                             {item.nombre_vendedor} · {item.codigo_vendedor}
                             {isMe && (
                               <span className="ml-2 bg-[#0b7a33] text-white text-xs px-2 py-1 rounded-lg">
@@ -849,7 +882,7 @@ export default function Page() {
 
           <div className="mt-4 bg-[#fafcf8] rounded-2xl border border-[#d8e2d2] px-4 py-4">
             <p className="text-sm text-[#62725b]">Tu posición actual</p>
-            <p className="text-2xl font-bold text-[#2f4f24]">
+            <p className="text-2xl font-bold text-[#1f2937]">
               {miPosicionRanking > 0 ? `${getMedal(miPosicionRanking - 1)} ${miPosicionRanking}` : "Sin posición aún"}
             </p>
           </div>
@@ -862,7 +895,7 @@ export default function Page() {
     <div className="bg-white rounded-[28px] p-5 md:p-6 shadow-sm border border-[#e7ece2]">
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-5">
         <div>
-          <h2 className="text-2xl md:text-3xl font-bold text-[#222]">Mis registros</h2>
+          <h2 className="text-2xl md:text-3xl font-bold text-[#111827]">Mis registros</h2>
           <p className="text-[#62725b] mt-1">Historial completo de tus actividades</p>
         </div>
 
@@ -871,7 +904,7 @@ export default function Page() {
           value={busqueda}
           onChange={(e) => setBusqueda(e.target.value)}
           placeholder="Buscar..."
-          className="bg-[#fafcf8] border border-[#d1ddd0] rounded-2xl px-4 py-3 outline-none"
+          className="bg-white border border-[#d1ddd0] rounded-2xl px-4 py-3 outline-none text-[#111827] placeholder:text-[#6b7280]"
         />
       </div>
 
@@ -890,12 +923,12 @@ export default function Page() {
             {registrosFiltrados.length > 0 ? (
               registrosFiltrados.map((registro) => (
                 <tr key={registro.id} className="border-b border-[#ebf0e7]">
-                  <td className="py-4 pr-3 text-[#40523a]">
+                  <td className="py-4 pr-3 text-[#374151]">
                     {new Date(registro.fecha).toLocaleString("es-CL")}
                   </td>
-                  <td className="py-4 pr-3 text-[#40523a]">{TIPOS_CONFIG[registro.tipo].label}</td>
-                  <td className="py-4 pr-3 text-[#40523a]">{registro.detalle ?? "-"}</td>
-                  <td className="py-4 pr-3 text-[#40523a]">{registro.rut_cliente || "—"}</td>
+                  <td className="py-4 pr-3 text-[#374151]">{TIPOS_CONFIG[registro.tipo].label}</td>
+                  <td className="py-4 pr-3 text-[#374151]">{registro.detalle ?? "-"}</td>
+                  <td className="py-4 pr-3 text-[#374151]">{registro.rut_cliente || "—"}</td>
                   <td className="py-4 pr-3 font-bold text-[#1f7a1f]">{formatMoney(registro.valor)}</td>
                 </tr>
               ))
@@ -919,7 +952,7 @@ export default function Page() {
     return (
       <div className="grid lg:grid-cols-2 gap-6">
         <div className="bg-white rounded-[28px] p-5 md:p-6 shadow-sm border border-[#e7ece2]">
-          <h2 className="text-2xl md:text-3xl font-bold text-[#222]">Metas</h2>
+          <h2 className="text-2xl md:text-3xl font-bold text-[#111827]">Metas</h2>
           <p className="text-[#62725b] mt-1">Las metas consideran solo aperturas</p>
 
           <div className="mt-6 space-y-6">
@@ -927,7 +960,7 @@ export default function Page() {
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-sm text-[#62725b]">Meta diaria</p>
-                  <p className="text-2xl font-bold text-[#2f4f24]">
+                  <p className="text-2xl font-bold text-[#1f2937]">
                     {aperturasHoy} / {META_DIARIA_APERTURAS}
                   </p>
                 </div>
@@ -944,7 +977,7 @@ export default function Page() {
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-sm text-[#62725b]">Meta semanal</p>
-                  <p className="text-2xl font-bold text-[#2f4f24]">
+                  <p className="text-2xl font-bold text-[#1f2937]">
                     {aperturasSemana} / {META_SEMANAL_APERTURAS}
                   </p>
                 </div>
@@ -960,27 +993,27 @@ export default function Page() {
         </div>
 
         <div className="bg-white rounded-[28px] p-5 md:p-6 shadow-sm border border-[#e7ece2]">
-          <h2 className="text-2xl md:text-3xl font-bold text-[#222]">Resumen</h2>
+          <h2 className="text-2xl md:text-3xl font-bold text-[#111827]">Resumen</h2>
 
           <div className="mt-6 grid gap-4">
             <div className="bg-[#fafcf8] rounded-2xl p-5">
               <p className="text-sm text-[#62725b]">Nivel actual</p>
-              <p className="text-3xl font-bold text-[#2f4f24] mt-2">{nivel.nombre}</p>
+              <p className="text-3xl font-bold text-[#1f2937] mt-2">{nivel.nombre}</p>
             </div>
 
             <div className="bg-[#fafcf8] rounded-2xl p-5">
               <p className="text-sm text-[#62725b]">CMR</p>
-              <p className="text-3xl font-bold text-[#2f4f24] mt-2">{totalCMR}</p>
+              <p className="text-3xl font-bold text-[#1f2937] mt-2">{totalCMR}</p>
             </div>
 
             <div className="bg-[#fafcf8] rounded-2xl p-5">
               <p className="text-sm text-[#62725b]">Cuenta Corriente</p>
-              <p className="text-3xl font-bold text-[#2f4f24] mt-2">{totalCuentaCorriente}</p>
+              <p className="text-3xl font-bold text-[#1f2937] mt-2">{totalCuentaCorriente}</p>
             </div>
 
             <div className="bg-[#fafcf8] rounded-2xl p-5">
               <p className="text-sm text-[#62725b]">Escaneos</p>
-              <p className="text-3xl font-bold text-[#2f4f24] mt-2">{totalEscaneos}</p>
+              <p className="text-3xl font-bold text-[#1f2937] mt-2">{totalEscaneos}</p>
             </div>
           </div>
         </div>
@@ -991,7 +1024,7 @@ export default function Page() {
   const renderExportar = () => (
     <div className="grid md:grid-cols-2 gap-6">
       <div className="bg-white rounded-[28px] p-5 md:p-6 shadow-sm border border-[#e7ece2]">
-        <h2 className="text-2xl md:text-3xl font-bold text-[#222]">Exportar Excel</h2>
+        <h2 className="text-2xl md:text-3xl font-bold text-[#111827]">Exportar Excel</h2>
         <p className="text-[#62725b] mt-1">Se descarga en CSV, compatible con Excel</p>
 
         <div className="mt-6 space-y-4">
@@ -1004,7 +1037,7 @@ export default function Page() {
 
           <button
             onClick={exportarRanking}
-            className="w-full bg-[#fafcf8] border border-[#b7d7a8] text-[#2f4f24] rounded-2xl py-4 text-lg font-bold"
+            className="w-full bg-[#fafcf8] border border-[#b7d7a8] text-[#1f2937] rounded-2xl py-4 text-lg font-bold"
           >
             Exportar ranking diario
           </button>
@@ -1012,17 +1045,17 @@ export default function Page() {
       </div>
 
       <div className="bg-white rounded-[28px] p-5 md:p-6 shadow-sm border border-[#e7ece2]">
-        <h2 className="text-2xl md:text-3xl font-bold text-[#222]">Resumen exportable</h2>
+        <h2 className="text-2xl md:text-3xl font-bold text-[#111827]">Resumen exportable</h2>
 
         <div className="mt-6 space-y-4">
           <div className="bg-[#fafcf8] rounded-2xl p-4">
             <p className="text-sm text-[#62725b]">Aperturas totales</p>
-            <p className="text-2xl font-bold text-[#2f4f24]">{totalAperturas}</p>
+            <p className="text-2xl font-bold text-[#1f2937]">{totalAperturas}</p>
           </div>
 
           <div className="bg-[#fafcf8] rounded-2xl p-4">
             <p className="text-sm text-[#62725b]">Escaneos totales</p>
-            <p className="text-2xl font-bold text-[#2f4f24]">{totalEscaneos}</p>
+            <p className="text-2xl font-bold text-[#1f2937]">{totalEscaneos}</p>
           </div>
 
           <div className="bg-[#fafcf8] rounded-2xl p-4">
@@ -1055,7 +1088,7 @@ export default function Page() {
 
     return (
       <div className="bg-white rounded-[28px] p-5 md:p-6 shadow-sm border border-[#e7ece2]">
-        <h2 className="text-2xl md:text-3xl font-bold text-[#222] mb-5">Panel jefe</h2>
+        <h2 className="text-2xl md:text-3xl font-bold text-[#111827] mb-5">Panel jefe</h2>
 
         <div className="overflow-x-auto">
           <table className="w-full border-collapse text-sm md:text-base">
@@ -1073,11 +1106,11 @@ export default function Page() {
               {resumenJefatura.length > 0 ? (
                 resumenJefatura.map((item, index) => (
                   <tr key={item.codigo} className="border-b border-[#ebf0e7]">
-                    <td className="py-4 pr-3 text-[#40523a] font-semibold">{getMedal(index)}</td>
-                    <td className="py-4 pr-3 text-[#40523a]">{item.nombre}</td>
-                    <td className="py-4 pr-3 text-[#40523a]">{item.codigo}</td>
-                    <td className="py-4 pr-3 text-[#40523a]">{item.aperturas}</td>
-                    <td className="py-4 pr-3 text-[#40523a]">{item.escaneos}</td>
+                    <td className="py-4 pr-3 text-[#374151] font-semibold">{getMedal(index)}</td>
+                    <td className="py-4 pr-3 text-[#374151]">{item.nombre}</td>
+                    <td className="py-4 pr-3 text-[#374151]">{item.codigo}</td>
+                    <td className="py-4 pr-3 text-[#374151]">{item.aperturas}</td>
+                    <td className="py-4 pr-3 text-[#374151]">{item.escaneos}</td>
                     <td className="py-4 pr-3 font-bold text-[#1f7a1f]">{formatMoney(item.totalDinero)}</td>
                   </tr>
                 ))
@@ -1101,7 +1134,7 @@ export default function Page() {
     return (
       <div className="grid lg:grid-cols-2 gap-6">
         <div className="bg-white rounded-[28px] p-5 md:p-6 shadow-sm border border-[#e7ece2]">
-          <h2 className="text-2xl md:text-3xl font-bold text-[#222]">Crear usuario</h2>
+          <h2 className="text-2xl md:text-3xl font-bold text-[#111827]">Crear usuario</h2>
 
           <div className="mt-6 space-y-4">
             <input
@@ -1109,7 +1142,7 @@ export default function Page() {
               value={nuevoCodigo}
               onChange={(e) => setNuevoCodigo(e.target.value)}
               placeholder="Código vendedor"
-              className="w-full bg-[#fafcf8] border border-[#d1ddd0] rounded-2xl px-4 py-3 outline-none"
+              className={inputClass}
             />
 
             <input
@@ -1117,7 +1150,7 @@ export default function Page() {
               value={nuevoNombre}
               onChange={(e) => setNuevoNombre(e.target.value)}
               placeholder="Nombre completo"
-              className="w-full bg-[#fafcf8] border border-[#d1ddd0] rounded-2xl px-4 py-3 outline-none"
+              className={inputClass}
             />
 
             <input
@@ -1125,13 +1158,13 @@ export default function Page() {
               value={nuevoPin}
               onChange={(e) => setNuevoPin(e.target.value.replace(/\D/g, "").slice(0, 4))}
               placeholder="PIN 4 dígitos"
-              className="w-full bg-[#fafcf8] border border-[#d1ddd0] rounded-2xl px-4 py-3 outline-none"
+              className={inputClass}
             />
 
             <select
               value={nuevoRol}
               onChange={(e) => setNuevoRol(e.target.value as Rol)}
-              className="w-full bg-[#fafcf8] border border-[#d1ddd0] rounded-2xl px-4 py-3 outline-none"
+              className={selectClass}
             >
               <option value="vendedor">Vendedor</option>
               <option value="jefe">Jefe</option>
@@ -1148,7 +1181,7 @@ export default function Page() {
         </div>
 
         <div className="bg-white rounded-[28px] p-5 md:p-6 shadow-sm border border-[#e7ece2]">
-          <h2 className="text-2xl md:text-3xl font-bold text-[#222] mb-5">Usuarios creados</h2>
+          <h2 className="text-2xl md:text-3xl font-bold text-[#111827] mb-5">Usuarios creados</h2>
 
           <div className="overflow-x-auto">
             <table className="w-full border-collapse text-sm md:text-base">
@@ -1164,10 +1197,10 @@ export default function Page() {
                 {usuarios.length > 0 ? (
                   usuarios.map((u) => (
                     <tr key={u.id} className="border-b border-[#ebf0e7]">
-                      <td className="py-4 pr-3 text-[#40523a]">{u.nombre}</td>
-                      <td className="py-4 pr-3 text-[#40523a]">{u.codigo_vendedor}</td>
-                      <td className="py-4 pr-3 text-[#40523a] capitalize">{u.rol}</td>
-                      <td className="py-4 pr-3 text-[#40523a]">{u.activo ? "Sí" : "No"}</td>
+                      <td className="py-4 pr-3 text-[#374151]">{u.nombre}</td>
+                      <td className="py-4 pr-3 text-[#374151]">{u.codigo_vendedor}</td>
+                      <td className="py-4 pr-3 text-[#374151] capitalize">{u.rol}</td>
+                      <td className="py-4 pr-3 text-[#374151]">{u.activo ? "Sí" : "No"}</td>
                     </tr>
                   ))
                 ) : (
@@ -1189,67 +1222,45 @@ export default function Page() {
     <main className="min-h-screen bg-[#f5f7f3]">
       <div className="min-h-screen lg:flex">
         <aside className="hidden lg:flex w-[260px] bg-white border-r border-[#dde8d8] flex-col p-4">
-          <div className="bg-[#0b7a33] rounded-2xl p-5 text-white mb-6">
-            <p className="text-sm uppercase tracking-[0.2em] text-white/70">Sistema</p>
-            <p className="font-bold text-3xl leading-tight mt-2">Registremos</p>
+          <div className="rounded-2xl p-5 bg-[#0b7a33] text-white mb-6 text-center">
+            <div className="flex justify-center mb-3">
+              <Image
+                src="/logo-rta.png"
+                alt="Logo RTA"
+                width={90}
+                height={90}
+                className="w-20 h-20 object-contain"
+              />
+            </div>
+            <p className="font-bold text-3xl leading-tight">Registremos</p>
             <p className="font-bold text-3xl leading-tight">Tu Apertura</p>
           </div>
 
           <nav className="space-y-2">
-            <button
-              onClick={() => setVistaActiva("dashboard")}
-              className={`w-full text-left rounded-2xl px-4 py-3 font-semibold ${
-                vistaActiva === "dashboard" ? "bg-[#0b7a33] text-white" : "text-[#40523a]"
-              }`}
-            >
+            <button onClick={() => setVistaActiva("dashboard")} className={`w-full text-left rounded-2xl px-4 py-3 font-semibold ${vistaActiva === "dashboard" ? "bg-[#0b7a33] text-white" : "text-[#40523a]"}`}>
               Dashboard
             </button>
 
-            <button
-              onClick={() => setVistaActiva("mis_registros")}
-              className={`w-full text-left rounded-2xl px-4 py-3 font-semibold ${
-                vistaActiva === "mis_registros" ? "bg-[#0b7a33] text-white" : "text-[#40523a]"
-              }`}
-            >
+            <button onClick={() => setVistaActiva("mis_registros")} className={`w-full text-left rounded-2xl px-4 py-3 font-semibold ${vistaActiva === "mis_registros" ? "bg-[#0b7a33] text-white" : "text-[#40523a]"}`}>
               Mis registros
             </button>
 
-            <button
-              onClick={() => setVistaActiva("metas")}
-              className={`w-full text-left rounded-2xl px-4 py-3 font-semibold ${
-                vistaActiva === "metas" ? "bg-[#0b7a33] text-white" : "text-[#40523a]"
-              }`}
-            >
+            <button onClick={() => setVistaActiva("metas")} className={`w-full text-left rounded-2xl px-4 py-3 font-semibold ${vistaActiva === "metas" ? "bg-[#0b7a33] text-white" : "text-[#40523a]"}`}>
               Metas
             </button>
 
-            <button
-              onClick={() => setVistaActiva("exportar")}
-              className={`w-full text-left rounded-2xl px-4 py-3 font-semibold ${
-                vistaActiva === "exportar" ? "bg-[#0b7a33] text-white" : "text-[#40523a]"
-              }`}
-            >
+            <button onClick={() => setVistaActiva("exportar")} className={`w-full text-left rounded-2xl px-4 py-3 font-semibold ${vistaActiva === "exportar" ? "bg-[#0b7a33] text-white" : "text-[#40523a]"}`}>
               Exportar Excel
             </button>
 
             {esJefe && (
-              <button
-                onClick={() => setVistaActiva("panel_jefe")}
-                className={`w-full text-left rounded-2xl px-4 py-3 font-semibold ${
-                  vistaActiva === "panel_jefe" ? "bg-[#0b7a33] text-white" : "text-[#40523a]"
-                }`}
-              >
+              <button onClick={() => setVistaActiva("panel_jefe")} className={`w-full text-left rounded-2xl px-4 py-3 font-semibold ${vistaActiva === "panel_jefe" ? "bg-[#0b7a33] text-white" : "text-[#40523a]"}`}>
                 Panel jefe
               </button>
             )}
 
             {esAdmin && (
-              <button
-                onClick={() => setVistaActiva("admin")}
-                className={`w-full text-left rounded-2xl px-4 py-3 font-semibold ${
-                  vistaActiva === "admin" ? "bg-[#0b7a33] text-white" : "text-[#40523a]"
-                }`}
-              >
+              <button onClick={() => setVistaActiva("admin")} className={`w-full text-left rounded-2xl px-4 py-3 font-semibold ${vistaActiva === "admin" ? "bg-[#0b7a33] text-white" : "text-[#40523a]"}`}>
                 Administrador
               </button>
             )}
@@ -1257,10 +1268,8 @@ export default function Page() {
 
           <div className="mt-6 bg-[#fafcf8] rounded-3xl border border-[#dfe8d8] p-4 shadow-sm">
             <p className="text-sm text-[#7a8c72]">Usuario</p>
-            <p className="text-xl font-bold text-[#2f4f24] mt-2">{user.nombre}</p>
-            <p className="text-sm text-[#62725b] mt-1">
-              {user.codigo} · {user.rol}
-            </p>
+            <p className="text-xl font-bold text-[#1f2937] mt-2">{user.nombre}</p>
+            <p className="text-sm text-[#62725b] mt-1">{user.codigo} · {user.rol}</p>
           </div>
         </aside>
 
@@ -1311,30 +1320,15 @@ export default function Page() {
 
       <div className="lg:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-[#dfe8d8] px-2 py-2">
         <div className="grid grid-cols-4 gap-2 text-xs">
-          <button
-            onClick={() => setVistaActiva("dashboard")}
-            className={`rounded-xl px-2 py-3 font-semibold ${
-              vistaActiva === "dashboard" ? "bg-[#0b7a33] text-white" : "bg-[#f5f7f3] text-[#40523a]"
-            }`}
-          >
+          <button onClick={() => setVistaActiva("dashboard")} className={`rounded-xl px-2 py-3 font-semibold ${vistaActiva === "dashboard" ? "bg-[#0b7a33] text-white" : "bg-[#f5f7f3] text-[#40523a]"}`}>
             Inicio
           </button>
 
-          <button
-            onClick={() => setVistaActiva("mis_registros")}
-            className={`rounded-xl px-2 py-3 font-semibold ${
-              vistaActiva === "mis_registros" ? "bg-[#0b7a33] text-white" : "bg-[#f5f7f3] text-[#40523a]"
-            }`}
-          >
+          <button onClick={() => setVistaActiva("mis_registros")} className={`rounded-xl px-2 py-3 font-semibold ${vistaActiva === "mis_registros" ? "bg-[#0b7a33] text-white" : "bg-[#f5f7f3] text-[#40523a]"}`}>
             Registros
           </button>
 
-          <button
-            onClick={() => setVistaActiva("metas")}
-            className={`rounded-xl px-2 py-3 font-semibold ${
-              vistaActiva === "metas" ? "bg-[#0b7a33] text-white" : "bg-[#f5f7f3] text-[#40523a]"
-            }`}
-          >
+          <button onClick={() => setVistaActiva("metas")} className={`rounded-xl px-2 py-3 font-semibold ${vistaActiva === "metas" ? "bg-[#0b7a33] text-white" : "bg-[#f5f7f3] text-[#40523a]"}`}>
             Metas
           </button>
 
