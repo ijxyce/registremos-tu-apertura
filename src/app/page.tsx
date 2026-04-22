@@ -1,24 +1,42 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { supabase } from "../lib/supabase";
 
-type Vista = "dashboard" | "mis_registros" | "metas" | "exportar" | "panel_jefe";
+type Vista = "dashboard" | "mis_registros" | "metas" | "exportar" | "panel_jefe" | "admin";
 type TipoActividad = "CMR" | "CUENTA_CORRIENTE" | "ESCANEO";
+type Rol = "vendedor" | "jefe" | "administrador";
+
+type User = {
+  codigo: string;
+  nombre: string;
+  rol: Rol;
+};
 
 type Registro = {
   id: number;
   codigo_vendedor: string;
+  nombre_vendedor: string | null;
+  rol_vendedor: Rol | null;
   rut_cliente: string | null;
   fecha: string;
   tipo: TipoActividad;
   valor: number;
-  detalle?: string | null;
+  detalle: string | null;
 };
 
 type RankingItem = {
   codigo_vendedor: string;
+  nombre_vendedor: string;
   total: number;
+};
+
+type UsuarioAdmin = {
+  id: string;
+  codigo_vendedor: string;
+  nombre: string;
+  rol: Rol;
+  activo: boolean;
+  created_at: string;
 };
 
 type NivelInfo = {
@@ -31,8 +49,6 @@ type NivelInfo = {
   mensaje: string;
 };
 
-const SESION_KEY = "registremos-tu-apertura-sesion";
-const ADMIN_CODES = ["486868"];
 const META_DIARIA_APERTURAS = 8;
 const META_SEMANAL_APERTURAS = 30;
 
@@ -115,10 +131,6 @@ function validateRut(rut: string) {
   return expected === dv;
 }
 
-function cleanSellerCode(value: string) {
-  return value.replace(/\D/g, "").slice(0, 6);
-}
-
 function formatMoney(value: number) {
   return new Intl.NumberFormat("es-CL", {
     style: "currency",
@@ -143,17 +155,6 @@ function getChileDateOnlyFromISO(iso: string) {
     month: "2-digit",
     day: "2-digit",
   }).format(new Date(iso));
-}
-
-function getChileOffset() {
-  const now = new Date();
-  const chileNow = new Date(now.toLocaleString("en-US", { timeZone: "America/Santiago" }));
-  const diffMinutes = Math.round((chileNow.getTime() - now.getTime()) / 60000);
-  const sign = diffMinutes >= 0 ? "+" : "-";
-  const abs = Math.abs(diffMinutes);
-  const hours = String(Math.floor(abs / 60)).padStart(2, "0");
-  const minutes = String(abs % 60).padStart(2, "0");
-  return `${sign}${hours}:${minutes}`;
 }
 
 function isApertura(tipo: TipoActividad) {
@@ -216,13 +217,6 @@ function getNivelInfo(totalAperturas: number): NivelInfo {
   };
 }
 
-function getValorActividad(totalAperturasPrevias: number, tipo: TipoActividad) {
-  if (tipo === "ESCANEO") return 500;
-  const tramo = getNivelInfo(totalAperturasPrevias);
-  if (tipo === "CMR") return tramo.recompensaCMR;
-  return tramo.recompensaCC;
-}
-
 function exportRowsToCsv(filename: string, rows: Record<string, string | number | null>[]) {
   if (!rows.length) return;
 
@@ -261,211 +255,240 @@ function getMedalBg(index: number) {
 }
 
 export default function Page() {
+  const [user, setUser] = useState<User | null>(null);
+  const [registros, setRegistros] = useState<Registro[]>([]);
+  const [ranking, setRanking] = useState<RankingItem[]>([]);
+  const [usuarios, setUsuarios] = useState<UsuarioAdmin[]>([]);
+  const [vistaActiva, setVistaActiva] = useState<Vista>("dashboard");
+
   const [codigoLogin, setCodigoLogin] = useState("");
-  const [vendedorActivo, setVendedorActivo] = useState("");
+  const [pinLogin, setPinLogin] = useState("");
+
+  const [bootstrapNeeded, setBootstrapNeeded] = useState(false);
+  const [bootstrapCodigo, setBootstrapCodigo] = useState("");
+  const [bootstrapNombre, setBootstrapNombre] = useState("");
+  const [bootstrapPin, setBootstrapPin] = useState("");
+
   const [rutCliente, setRutCliente] = useState("");
   const [tipoSeleccionado, setTipoSeleccionado] = useState<TipoActividad>("CMR");
+
+  const [nuevoCodigo, setNuevoCodigo] = useState("");
+  const [nuevoNombre, setNuevoNombre] = useState("");
+  const [nuevoPin, setNuevoPin] = useState("");
+  const [nuevoRol, setNuevoRol] = useState<Rol>("vendedor");
+
   const [busqueda, setBusqueda] = useState("");
   const [mensaje, setMensaje] = useState("");
   const [error, setError] = useState("");
-  const [errorLogin, setErrorLogin] = useState("");
-  const [registros, setRegistros] = useState<Registro[]>([]);
-  const [ranking, setRanking] = useState<RankingItem[]>([]);
-  const [vistaActiva, setVistaActiva] = useState<Vista>("dashboard");
 
-  const esJefe = ADMIN_CODES.includes(vendedorActivo);
+  const esJefe = user?.rol === "jefe" || user?.rol === "administrador";
+  const esAdmin = user?.rol === "administrador";
 
-  const cargarDatos = async () => {
+  const cargarBootstrap = async () => {
+    const res = await fetch("/api/bootstrap-admin", { cache: "no-store" });
+
+    let data: any = {};
+    try {
+      data = await res.json();
+    } catch {
+      data = {};
+    }
+
+    if (!res.ok) {
+      setError(data.error || "No se pudo validar el administrador inicial.");
+      return;
+    }
+
+    setBootstrapNeeded(Boolean(data.needsBootstrap));
+  };
+
+  const cargarApp = async () => {
     setError("");
 
-    const hoyChile = getChileDateString();
-    const offset = getChileOffset();
-    const inicioChile = `${hoyChile}T00:00:00${offset}`;
-    const finChile = `${hoyChile}T23:59:59${offset}`;
-
-    const { data: aperturasData, error: aperturasError } = await supabase
-      .from("aperturas")
-      .select("id, codigo_vendedor, rut_cliente, fecha, tipo, valor, detalle")
-      .order("fecha", { ascending: false });
-
-    if (aperturasError) {
-      setError(`Error cargando registros: ${aperturasError.message}`);
-      return;
-    }
-
-    const { data: rankingData, error: rankingError } = await supabase
-      .from("aperturas")
-      .select("codigo_vendedor, tipo, fecha")
-      .gte("fecha", inicioChile)
-      .lte("fecha", finChile);
-
-    if (rankingError) {
-      setError(`Error cargando ranking: ${rankingError.message}`);
-      return;
-    }
-
-    const agrupado = new Map<string, number>();
-
-    (rankingData ?? []).forEach((item: { codigo_vendedor: string; tipo: TipoActividad; fecha: string }) => {
-      if (!isApertura(item.tipo)) return;
-      agrupado.set(item.codigo_vendedor, (agrupado.get(item.codigo_vendedor) ?? 0) + 1);
+    const res = await fetch("/api/app-data", {
+      method: "GET",
+      cache: "no-store",
     });
 
-    const rankingOrdenado = Array.from(agrupado.entries())
-      .map(([codigo_vendedor, total]) => ({ codigo_vendedor, total }))
-      .sort((a, b) => b.total - a.total);
+    let data: any = {};
+    try {
+      data = await res.json();
+    } catch {
+      data = {};
+    }
 
-    setRegistros((aperturasData ?? []) as Registro[]);
-    setRanking(rankingOrdenado);
+    if (!res.ok) {
+      setError(data.error || "Error al cargar la app.");
+      return false;
+    }
+
+    setUser(data.user ?? null);
+    setRegistros(data.registros ?? []);
+    setRanking(data.ranking ?? []);
+    setUsuarios(data.usuarios ?? []);
+
+    return true;
   };
 
   useEffect(() => {
-    if (typeof window !== "undefined") {
-      const sesionGuardada = localStorage.getItem(SESION_KEY);
-      if (sesionGuardada) {
-        setVendedorActivo(sesionGuardada);
-        setCodigoLogin(sesionGuardada);
-      }
-    }
-
-    cargarDatos().catch((err) => {
-      const mensaje = err instanceof Error ? err.message : "Error desconocido al cargar datos.";
-      setError(mensaje);
-    });
+    cargarBootstrap();
+    cargarApp();
   }, []);
 
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-
-    if (vendedorActivo) localStorage.setItem(SESION_KEY, vendedorActivo);
-    else localStorage.removeItem(SESION_KEY);
-  }, [vendedorActivo]);
-
-  const registrosDelVendedor = useMemo(() => {
-    return registros.filter((r) => r.codigo_vendedor === vendedorActivo);
-  }, [registros, vendedorActivo]);
+  const registrosDelUsuario = useMemo(() => {
+    if (!user) return [];
+    return registros.filter((r) => r.codigo_vendedor === user.codigo);
+  }, [registros, user]);
 
   const registrosFiltrados = useMemo(() => {
     const term = busqueda.toLowerCase().trim();
-    if (!term) return registrosDelVendedor;
+    if (!term) return registrosDelUsuario;
 
-    return registrosDelVendedor.filter(
+    return registrosDelUsuario.filter(
       (r) =>
         r.codigo_vendedor.toLowerCase().includes(term) ||
+        (r.nombre_vendedor ?? "").toLowerCase().includes(term) ||
         (r.rut_cliente ?? "").toLowerCase().includes(term) ||
         TIPOS_CONFIG[r.tipo].label.toLowerCase().includes(term)
     );
-  }, [busqueda, registrosDelVendedor]);
+  }, [busqueda, registrosDelUsuario]);
 
-  const aperturasDelVendedor = useMemo(
-    () => registrosDelVendedor.filter((r) => isApertura(r.tipo)),
-    [registrosDelVendedor]
+  const aperturasDelUsuario = useMemo(
+    () => registrosDelUsuario.filter((r) => isApertura(r.tipo)),
+    [registrosDelUsuario]
   );
 
-  const escaneosDelVendedor = useMemo(
-    () => registrosDelVendedor.filter((r) => r.tipo === "ESCANEO"),
-    [registrosDelVendedor]
+  const escaneosDelUsuario = useMemo(
+    () => registrosDelUsuario.filter((r) => r.tipo === "ESCANEO"),
+    [registrosDelUsuario]
   );
 
-  const totalAperturas = aperturasDelVendedor.length;
-  const totalEscaneos = escaneosDelVendedor.length;
-  const totalCMR = registrosDelVendedor.filter((r) => r.tipo === "CMR").length;
-  const totalCuentaCorriente = registrosDelVendedor.filter((r) => r.tipo === "CUENTA_CORRIENTE").length;
+  const totalAperturas = aperturasDelUsuario.length;
+  const totalEscaneos = escaneosDelUsuario.length;
+  const totalCMR = registrosDelUsuario.filter((r) => r.tipo === "CMR").length;
+  const totalCuentaCorriente = registrosDelUsuario.filter((r) => r.tipo === "CUENTA_CORRIENTE").length;
 
   const aperturasHoy = useMemo(() => {
     const hoy = getChileDateString();
-    return aperturasDelVendedor.filter((r) => getChileDateOnlyFromISO(r.fecha) === hoy).length;
-  }, [aperturasDelVendedor]);
+    return aperturasDelUsuario.filter((r) => getChileDateOnlyFromISO(r.fecha) === hoy).length;
+  }, [aperturasDelUsuario]);
 
   const escaneosHoy = useMemo(() => {
     const hoy = getChileDateString();
-    return escaneosDelVendedor.filter((r) => getChileDateOnlyFromISO(r.fecha) === hoy).length;
-  }, [escaneosDelVendedor]);
+    return escaneosDelUsuario.filter((r) => getChileDateOnlyFromISO(r.fecha) === hoy).length;
+  }, [escaneosDelUsuario]);
 
-  const totalDinero = useMemo(
-    () => registrosDelVendedor.reduce((acc, item) => acc + (item.valor ?? 0), 0),
-    [registrosDelVendedor]
-  );
+  const totalDinero = useMemo(() => {
+    return registrosDelUsuario.reduce((acc, item) => acc + (item.valor ?? 0), 0);
+  }, [registrosDelUsuario]);
 
   const dineroHoy = useMemo(() => {
     const hoy = getChileDateString();
-    return registrosDelVendedor
+    return registrosDelUsuario
       .filter((r) => getChileDateOnlyFromISO(r.fecha) === hoy)
       .reduce((acc, r) => acc + r.valor, 0);
-  }, [registrosDelVendedor]);
+  }, [registrosDelUsuario]);
 
   const nivel = getNivelInfo(totalAperturas);
-  const miPosicionRanking = ranking.findIndex((item) => item.codigo_vendedor === vendedorActivo) + 1;
+  const miPosicionRanking = user
+    ? ranking.findIndex((item) => item.codigo_vendedor === user.codigo) + 1
+    : 0;
 
   const aperturasSemana = useMemo(() => {
     const hoy = new Date();
     const hace7 = new Date();
     hace7.setDate(hoy.getDate() - 6);
-    return aperturasDelVendedor.filter((r) => new Date(r.fecha) >= hace7).length;
-  }, [aperturasDelVendedor]);
+    return aperturasDelUsuario.filter((r) => new Date(r.fecha) >= hace7).length;
+  }, [aperturasDelUsuario]);
 
-  const exportarMisRegistros = () => {
-    const rows = registrosDelVendedor.map((registro) => ({
-      fecha: new Date(registro.fecha).toLocaleString("es-CL"),
-      tipo: TIPOS_CONFIG[registro.tipo].label,
-      detalle: registro.detalle ?? "",
-      rut: registro.rut_cliente ?? "",
-      valor: registro.valor,
-      vendedor: registro.codigo_vendedor,
-    }));
-
-    exportRowsToCsv(`mis-registros-${vendedorActivo}.csv`, rows);
-  };
-
-  const exportarRanking = () => {
-    const rows = ranking.map((item, index) => ({
-      posicion: index + 1,
-      codigo_vendedor: item.codigo_vendedor,
-      aperturas_hoy: item.total,
-    }));
-
-    exportRowsToCsv(`ranking-diario-${getChileDateString()}.csv`, rows);
-  };
-
-  const handleLogin = () => {
-    setErrorLogin("");
-    setMensaje("");
+  const crearBootstrapAdmin = async () => {
     setError("");
+    setMensaje("");
 
-    const codigo = cleanSellerCode(codigoLogin);
-    if (codigo.length !== 6) {
-      setErrorLogin("Debes ingresar un código de vendedor válido de 6 dígitos.");
+    const res = await fetch("/api/bootstrap-admin", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        codigo_vendedor: bootstrapCodigo,
+        nombre: bootstrapNombre,
+        pin: bootstrapPin,
+      }),
+    });
+
+    let data: any = {};
+    try {
+      data = await res.json();
+    } catch {
+      data = {};
+    }
+
+    if (!res.ok) {
+      setError(data.error || "No se pudo crear el administrador inicial.");
       return;
     }
 
-    setVendedorActivo(codigo);
-    setCodigoLogin(codigo);
+    setMensaje("Administrador inicial creado correctamente.");
+    setBootstrapNeeded(false);
   };
 
-  const handleLogout = () => {
-    setVendedorActivo("");
+  const handleLogin = async () => {
+    setError("");
+    setMensaje("");
+
+    const res = await fetch("/api/login", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        codigo: codigoLogin,
+        pin: pinLogin,
+      }),
+    });
+
+    let data: any = {};
+    try {
+      data = await res.json();
+    } catch {
+      data = {};
+    }
+
+    if (!res.ok) {
+      setError(data.error || "No se pudo iniciar sesión.");
+      return;
+    }
+
+    const ok = await cargarApp();
+
+    if (!ok) {
+      setError("La sesión se creó, pero no se pudo cargar la app.");
+      return;
+    }
+
     setCodigoLogin("");
-    setRutCliente("");
-    setTipoSeleccionado("CMR");
-    setBusqueda("");
+    setPinLogin("");
+  };
+
+  const handleLogout = async () => {
+    await fetch("/api/logout", { method: "POST" });
+    setUser(null);
+    setRegistros([]);
+    setRanking([]);
+    setUsuarios([]);
+    setVistaActiva("dashboard");
     setMensaje("");
     setError("");
-    setErrorLogin("");
-    setVistaActiva("dashboard");
+    await cargarBootstrap();
   };
-
 
   const handleGuardar = async () => {
-    setMensaje("");
     setError("");
+    setMensaje("");
 
     const requiereRut = tipoSeleccionado !== "ESCANEO";
     const rutFormateado = formatRut(rutCliente);
-
-    if (!vendedorActivo) {
-      setError("Debes iniciar sesión para registrar una gestión.");
-      return;
-    }
 
     if (requiereRut && !rutCliente.trim()) {
       setError("Debes ingresar el RUT del cliente.");
@@ -477,79 +500,112 @@ export default function Page() {
       return;
     }
 
-    const hoy = getChileDateString();
+    const res = await fetch("/api/registrar-actividad", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        tipo: tipoSeleccionado,
+        rut_cliente: requiereRut ? rutFormateado : null,
+        detalle: TIPOS_CONFIG[tipoSeleccionado].detalle,
+      }),
+    });
 
-    if (requiereRut) {
-      const duplicadoHoy = registros.some((r) => {
-        if (r.codigo_vendedor !== vendedorActivo) return false;
-        if ((r.rut_cliente ?? "") === "") return false;
-        if (cleanRut(r.rut_cliente ?? "") !== cleanRut(rutFormateado)) return false;
-        return getChileDateOnlyFromISO(r.fecha) === hoy;
-      });
-
-      if (duplicadoHoy) {
-        setError("Este RUT ya fue ingresado hoy por este vendedor.");
-        return;
-      }
+    let data: any = {};
+    try {
+      data = await res.json();
+    } catch {
+      data = {};
     }
 
-    const totalAperturasPrevias = aperturasDelVendedor.length;
-    const valorCalculado = getValorActividad(totalAperturasPrevias, tipoSeleccionado);
-
-    const { error: insertError } = await supabase.from("aperturas").insert([
-      {
-        codigo_vendedor: vendedorActivo,
-        rut_cliente: requiereRut ? rutFormateado : null,
-        tipo: tipoSeleccionado,
-        valor: valorCalculado,
-        detalle: TIPOS_CONFIG[tipoSeleccionado].detalle,
-      },
-    ]);
-
-    if (insertError) {
-      setError(`No se pudo guardar la gestión: ${insertError.message}`);
+    if (!res.ok) {
+      setError(data.error || "No se pudo registrar la actividad.");
       return;
     }
 
     setRutCliente("");
     setTipoSeleccionado("CMR");
-    setMensaje("Gestión registrada correctamente.");
-    await cargarDatos();
+    setMensaje("Actividad registrada correctamente.");
+    await cargarApp();
   };
 
-  const resumenJefatura = useMemo(() => {
-    const hoy = getChileDateString();
-    const vendedores = new Map<string, { aperturas: number; escaneos: number; totalDinero: number }>();
+  const crearUsuario = async () => {
+    setError("");
+    setMensaje("");
 
-    registros.forEach((registro) => {
-      if (getChileDateOnlyFromISO(registro.fecha) !== hoy) return;
-
-      const actual = vendedores.get(registro.codigo_vendedor) ?? {
-        aperturas: 0,
-        escaneos: 0,
-        totalDinero: 0,
-      };
-
-      if (isApertura(registro.tipo)) actual.aperturas += 1;
-      if (registro.tipo === "ESCANEO") actual.escaneos += 1;
-      actual.totalDinero += registro.valor;
-
-      vendedores.set(registro.codigo_vendedor, actual);
+    const res = await fetch("/api/admin/usuarios", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        codigo_vendedor: nuevoCodigo,
+        nombre: nuevoNombre,
+        pin: nuevoPin,
+        rol: nuevoRol,
+      }),
     });
 
-    return Array.from(vendedores.entries())
-      .map(([codigo, data]) => ({ codigo, ...data }))
-      .sort((a, b) => b.aperturas - a.aperturas);
-  }, [registros]);
+    let data: any = {};
+    try {
+      data = await res.json();
+    } catch {
+      data = {};
+    }
 
-  if (!vendedorActivo) {
+    if (!res.ok) {
+      setError(data.error || "No se pudo crear el usuario.");
+      return;
+    }
+
+    setNuevoCodigo("");
+    setNuevoNombre("");
+    setNuevoPin("");
+    setNuevoRol("vendedor");
+    setMensaje("Usuario creado correctamente.");
+    await cargarApp();
+  };
+
+  const exportarMisRegistros = () => {
+    const rows = registrosDelUsuario.map((registro) => ({
+      fecha: new Date(registro.fecha).toLocaleString("es-CL"),
+      tipo: TIPOS_CONFIG[registro.tipo].label,
+      detalle: registro.detalle ?? "",
+      rut: registro.rut_cliente ?? "",
+      valor: registro.valor,
+      codigo: registro.codigo_vendedor,
+      nombre: registro.nombre_vendedor ?? "",
+    }));
+
+    exportRowsToCsv(`mis-registros-${user?.codigo ?? "usuario"}.csv`, rows);
+  };
+
+  const exportarRanking = () => {
+    const rows = ranking.map((item, index) => ({
+      posicion: index + 1,
+      codigo_vendedor: item.codigo_vendedor,
+      nombre_vendedor: item.nombre_vendedor,
+      aperturas_hoy: item.total,
+    }));
+
+    exportRowsToCsv(`ranking-diario-${getChileDateString()}.csv`, rows);
+  };
+
+  if (!user) {
     return (
       <main className="min-h-screen bg-gradient-to-br from-[#f3f8ef] via-white to-[#eef7ea] flex items-center justify-center p-4">
         <div className="w-full max-w-md bg-white rounded-[28px] shadow-xl p-6 border border-[#dfe8d8]">
           <div className="text-center mb-6">
-            <p className="text-xs uppercase tracking-[0.25em] text-[#7a8c72]">Sistema comercial</p>
-            <h1 className="text-3xl font-bold text-[#2d5d22] mt-3">Registremos Tu Apertura</h1>
-            <p className="text-[#687761] mt-3">Ingresa con tu código de vendedor</p>
+            <p className="text-xs uppercase tracking-[0.25em] text-[#7a8c72]">
+              Sistema comercial
+            </p>
+            <h1 className="text-3xl font-bold text-[#2d5d22] mt-3">
+              Registremos Tu Apertura
+            </h1>
+            <p className="text-[#687761] mt-3">
+              Acceso con código y PIN de 4 dígitos
+            </p>
           </div>
 
           {error && (
@@ -558,32 +614,75 @@ export default function Page() {
             </div>
           )}
 
-          <div className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-[#5e6d57] mb-2">Código de vendedor</label>
+          {mensaje && (
+            <div className="mb-4 bg-green-50 border border-green-200 text-green-700 rounded-2xl p-3 text-sm">
+              {mensaje}
+            </div>
+          )}
+
+          {bootstrapNeeded ? (
+            <div className="space-y-4">
+              <p className="text-sm font-semibold text-[#2d5d22]">
+                Crear administrador inicial
+              </p>
+
+              <input
+                type="text"
+                value={bootstrapCodigo}
+                onChange={(e) => setBootstrapCodigo(e.target.value)}
+                placeholder="Código vendedor"
+                className="w-full border border-[#cfe0c4] rounded-2xl px-4 py-3 outline-none"
+              />
+
+              <input
+                type="text"
+                value={bootstrapNombre}
+                onChange={(e) => setBootstrapNombre(e.target.value)}
+                placeholder="Nombre completo"
+                className="w-full border border-[#cfe0c4] rounded-2xl px-4 py-3 outline-none"
+              />
+
+              <input
+                type="password"
+                value={bootstrapPin}
+                onChange={(e) => setBootstrapPin(e.target.value.replace(/\D/g, "").slice(0, 4))}
+                placeholder="PIN 4 dígitos"
+                className="w-full border border-[#cfe0c4] rounded-2xl px-4 py-3 outline-none"
+              />
+
+              <button
+                onClick={crearBootstrapAdmin}
+                className="w-full bg-[#2b8a1f] hover:bg-[#236f19] text-white rounded-2xl py-4 font-semibold text-lg"
+              >
+                Crear administrador
+              </button>
+            </div>
+          ) : (
+            <div className="space-y-4">
               <input
                 type="text"
                 value={codigoLogin}
-                maxLength={6}
-                onChange={(e) => setCodigoLogin(cleanSellerCode(e.target.value))}
-                placeholder="123456"
-                className="w-full border border-[#cfe0c4] rounded-2xl px-4 py-4 text-center text-lg tracking-[0.2em] outline-none focus:ring-2 focus:ring-[#7ab648]"
+                onChange={(e) => setCodigoLogin(e.target.value)}
+                placeholder="Código vendedor"
+                className="w-full border border-[#cfe0c4] rounded-2xl px-4 py-3 outline-none"
               />
+
+              <input
+                type="password"
+                value={pinLogin}
+                onChange={(e) => setPinLogin(e.target.value.replace(/\D/g, "").slice(0, 4))}
+                placeholder="PIN 4 dígitos"
+                className="w-full border border-[#cfe0c4] rounded-2xl px-4 py-3 outline-none"
+              />
+
+              <button
+                onClick={handleLogin}
+                className="w-full bg-[#2b8a1f] hover:bg-[#236f19] text-white rounded-2xl py-4 font-semibold text-lg"
+              >
+                Ingresar
+              </button>
             </div>
-
-            {errorLogin && (
-              <div className="bg-red-50 border border-red-200 text-red-700 rounded-2xl p-3 text-sm">
-                {errorLogin}
-              </div>
-            )}
-
-            <button
-              onClick={handleLogin}
-              className="w-full bg-[#2b8a1f] hover:bg-[#236f19] text-white rounded-2xl py-4 font-semibold text-lg"
-            >
-              Ingresar
-            </button>
-          </div>
+          )}
         </div>
       </main>
     );
@@ -635,7 +734,12 @@ export default function Page() {
               {(Object.keys(TIPOS_CONFIG) as TipoActividad[]).map((tipo) => {
                 const cfg = TIPOS_CONFIG[tipo];
                 const active = tipoSeleccionado === tipo;
-                const valorSugerido = getValorActividad(aperturasDelVendedor.length, tipo);
+                const valorSugerido =
+                  tipo === "ESCANEO"
+                    ? 500
+                    : tipo === "CMR"
+                    ? nivel.recompensaCMR
+                    : nivel.recompensaCC;
 
                 return (
                   <button
@@ -669,11 +773,6 @@ export default function Page() {
               placeholder="12.345.678-5"
               className="w-full bg-[#fafcf8] border border-[#d1ddd0] rounded-2xl px-4 py-4 outline-none focus:ring-2 focus:ring-[#39b11c]"
             />
-            <p className="text-sm text-[#62725b] mt-2">
-              {tipoSeleccionado === "ESCANEO"
-                ? "En escaneo el RUT no es obligatorio."
-                : "En aperturas el RUT sí es obligatorio."}
-            </p>
           </div>
 
           <button
@@ -684,7 +783,7 @@ export default function Page() {
           </button>
 
           {mensaje && (
-            <div className="mt-4 bg-[#edf8e8] border border-[#b8ddb0] text-[#1f7a1f] rounded-2xl p-4">
+            <div className="mt-4 bg-[#edf8e8] border border-green-200 text-green-700 rounded-2xl p-4">
               {mensaje}
             </div>
           )}
@@ -696,9 +795,6 @@ export default function Page() {
               <h2 className="text-2xl md:text-3xl font-bold text-[#222]">Ranking diario</h2>
               <p className="text-[#62725b] mt-1">Solo aperturas</p>
             </div>
-            <div className="bg-[#f5f8f2] border border-[#d8e2d2] rounded-2xl px-4 py-2 text-[#485848] text-sm">
-              Hoy
-            </div>
           </div>
 
           <div className="space-y-3">
@@ -706,7 +802,7 @@ export default function Page() {
               ranking.slice(0, 10).map((item, index) => {
                 const max = ranking[0]?.total || 1;
                 const percent = (item.total / max) * 100;
-                const isMe = item.codigo_vendedor === vendedorActivo;
+                const isMe = item.codigo_vendedor === user.codigo;
 
                 return (
                   <div
@@ -722,7 +818,7 @@ export default function Page() {
                         </div>
                         <div className="min-w-0">
                           <div className="font-semibold text-[#2f4f24] truncate">
-                            {item.codigo_vendedor}
+                            {item.nombre_vendedor} · {item.codigo_vendedor}
                             {isMe && (
                               <span className="ml-2 bg-[#0b7a33] text-white text-xs px-2 py-1 rounded-lg">
                                 Tú
@@ -775,7 +871,7 @@ export default function Page() {
           value={busqueda}
           onChange={(e) => setBusqueda(e.target.value)}
           placeholder="Buscar..."
-          className="bg-[#fafcf8] border border-[#d1ddd0] rounded-2xl px-4 py-3 outline-none focus:ring-2 focus:ring-[#39b11c]"
+          className="bg-[#fafcf8] border border-[#d1ddd0] rounded-2xl px-4 py-3 outline-none"
         />
       </div>
 
@@ -800,9 +896,7 @@ export default function Page() {
                   <td className="py-4 pr-3 text-[#40523a]">{TIPOS_CONFIG[registro.tipo].label}</td>
                   <td className="py-4 pr-3 text-[#40523a]">{registro.detalle ?? "-"}</td>
                   <td className="py-4 pr-3 text-[#40523a]">{registro.rut_cliente || "—"}</td>
-                  <td className="py-4 pr-3 font-bold text-[#1f7a1f]">
-                    {formatMoney(registro.valor)}
-                  </td>
+                  <td className="py-4 pr-3 font-bold text-[#1f7a1f]">{formatMoney(registro.valor)}</td>
                 </tr>
               ))
             ) : (
@@ -872,7 +966,6 @@ export default function Page() {
             <div className="bg-[#fafcf8] rounded-2xl p-5">
               <p className="text-sm text-[#62725b]">Nivel actual</p>
               <p className="text-3xl font-bold text-[#2f4f24] mt-2">{nivel.nombre}</p>
-              <p className="text-sm text-[#62725b] mt-2">{nivel.mensaje}</p>
             </div>
 
             <div className="bg-[#fafcf8] rounded-2xl p-5">
@@ -944,20 +1037,32 @@ export default function Page() {
   const renderPanelJefe = () => {
     if (!esJefe) return null;
 
+    const hoy = getChileDateString();
+
+    const resumenJefatura = ranking.map((item) => {
+      const registrosVendedorHoy = registros.filter(
+        (r) => r.codigo_vendedor === item.codigo_vendedor && getChileDateOnlyFromISO(r.fecha) === hoy
+      );
+
+      return {
+        codigo: item.codigo_vendedor,
+        nombre: item.nombre_vendedor,
+        aperturas: registrosVendedorHoy.filter((r) => isApertura(r.tipo)).length,
+        escaneos: registrosVendedorHoy.filter((r) => r.tipo === "ESCANEO").length,
+        totalDinero: registrosVendedorHoy.reduce((acc, r) => acc + r.valor, 0),
+      };
+    });
+
     return (
       <div className="bg-white rounded-[28px] p-5 md:p-6 shadow-sm border border-[#e7ece2]">
-        <div className="flex items-center justify-between gap-4 mb-5 flex-wrap">
-          <div>
-            <h2 className="text-2xl md:text-3xl font-bold text-[#222]">Panel jefe</h2>
-            <p className="text-[#62725b] mt-1">Vista diaria por vendedor</p>
-          </div>
-        </div>
+        <h2 className="text-2xl md:text-3xl font-bold text-[#222] mb-5">Panel jefe</h2>
 
         <div className="overflow-x-auto">
           <table className="w-full border-collapse text-sm md:text-base">
             <thead>
               <tr className="border-b border-[#dde7d8] text-left">
                 <th className="py-3 pr-3 text-[#62725b]">Posición</th>
+                <th className="py-3 pr-3 text-[#62725b]">Nombre</th>
                 <th className="py-3 pr-3 text-[#62725b]">Código</th>
                 <th className="py-3 pr-3 text-[#62725b]">Aperturas</th>
                 <th className="py-3 pr-3 text-[#62725b]">Escaneos</th>
@@ -969,6 +1074,7 @@ export default function Page() {
                 resumenJefatura.map((item, index) => (
                   <tr key={item.codigo} className="border-b border-[#ebf0e7]">
                     <td className="py-4 pr-3 text-[#40523a] font-semibold">{getMedal(index)}</td>
+                    <td className="py-4 pr-3 text-[#40523a]">{item.nombre}</td>
                     <td className="py-4 pr-3 text-[#40523a]">{item.codigo}</td>
                     <td className="py-4 pr-3 text-[#40523a]">{item.aperturas}</td>
                     <td className="py-4 pr-3 text-[#40523a]">{item.escaneos}</td>
@@ -977,13 +1083,103 @@ export default function Page() {
                 ))
               ) : (
                 <tr>
-                  <td colSpan={5} className="py-8 text-center text-[#62725b]">
+                  <td colSpan={6} className="py-8 text-center text-[#62725b]">
                     Aún no hay datos para hoy.
                   </td>
                 </tr>
               )}
             </tbody>
           </table>
+        </div>
+      </div>
+    );
+  };
+
+  const renderAdmin = () => {
+    if (!esAdmin) return null;
+
+    return (
+      <div className="grid lg:grid-cols-2 gap-6">
+        <div className="bg-white rounded-[28px] p-5 md:p-6 shadow-sm border border-[#e7ece2]">
+          <h2 className="text-2xl md:text-3xl font-bold text-[#222]">Crear usuario</h2>
+
+          <div className="mt-6 space-y-4">
+            <input
+              type="text"
+              value={nuevoCodigo}
+              onChange={(e) => setNuevoCodigo(e.target.value)}
+              placeholder="Código vendedor"
+              className="w-full bg-[#fafcf8] border border-[#d1ddd0] rounded-2xl px-4 py-3 outline-none"
+            />
+
+            <input
+              type="text"
+              value={nuevoNombre}
+              onChange={(e) => setNuevoNombre(e.target.value)}
+              placeholder="Nombre completo"
+              className="w-full bg-[#fafcf8] border border-[#d1ddd0] rounded-2xl px-4 py-3 outline-none"
+            />
+
+            <input
+              type="password"
+              value={nuevoPin}
+              onChange={(e) => setNuevoPin(e.target.value.replace(/\D/g, "").slice(0, 4))}
+              placeholder="PIN 4 dígitos"
+              className="w-full bg-[#fafcf8] border border-[#d1ddd0] rounded-2xl px-4 py-3 outline-none"
+            />
+
+            <select
+              value={nuevoRol}
+              onChange={(e) => setNuevoRol(e.target.value as Rol)}
+              className="w-full bg-[#fafcf8] border border-[#d1ddd0] rounded-2xl px-4 py-3 outline-none"
+            >
+              <option value="vendedor">Vendedor</option>
+              <option value="jefe">Jefe</option>
+              <option value="administrador">Administrador</option>
+            </select>
+
+            <button
+              onClick={crearUsuario}
+              className="w-full bg-[#2fa11b] hover:bg-[#278817] text-white rounded-2xl py-4 text-lg font-bold"
+            >
+              Crear usuario
+            </button>
+          </div>
+        </div>
+
+        <div className="bg-white rounded-[28px] p-5 md:p-6 shadow-sm border border-[#e7ece2]">
+          <h2 className="text-2xl md:text-3xl font-bold text-[#222] mb-5">Usuarios creados</h2>
+
+          <div className="overflow-x-auto">
+            <table className="w-full border-collapse text-sm md:text-base">
+              <thead>
+                <tr className="border-b border-[#dde7d8] text-left">
+                  <th className="py-3 pr-3 text-[#62725b]">Nombre</th>
+                  <th className="py-3 pr-3 text-[#62725b]">Código</th>
+                  <th className="py-3 pr-3 text-[#62725b]">Rol</th>
+                  <th className="py-3 pr-3 text-[#62725b]">Activo</th>
+                </tr>
+              </thead>
+              <tbody>
+                {usuarios.length > 0 ? (
+                  usuarios.map((u) => (
+                    <tr key={u.id} className="border-b border-[#ebf0e7]">
+                      <td className="py-4 pr-3 text-[#40523a]">{u.nombre}</td>
+                      <td className="py-4 pr-3 text-[#40523a]">{u.codigo_vendedor}</td>
+                      <td className="py-4 pr-3 text-[#40523a] capitalize">{u.rol}</td>
+                      <td className="py-4 pr-3 text-[#40523a]">{u.activo ? "Sí" : "No"}</td>
+                    </tr>
+                  ))
+                ) : (
+                  <tr>
+                    <td colSpan={4} className="py-8 text-center text-[#62725b]">
+                      Aún no hay usuarios creados.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
     );
@@ -1000,37 +1196,71 @@ export default function Page() {
           </div>
 
           <nav className="space-y-2">
-            <button onClick={() => setVistaActiva("dashboard")} className={`w-full text-left rounded-2xl px-4 py-3 font-semibold ${vistaActiva === "dashboard" ? "bg-[#0b7a33] text-white" : "text-[#40523a]"}`}>
+            <button
+              onClick={() => setVistaActiva("dashboard")}
+              className={`w-full text-left rounded-2xl px-4 py-3 font-semibold ${
+                vistaActiva === "dashboard" ? "bg-[#0b7a33] text-white" : "text-[#40523a]"
+              }`}
+            >
               Dashboard
             </button>
-            <button onClick={() => setVistaActiva("mis_registros")} className={`w-full text-left rounded-2xl px-4 py-3 font-semibold ${vistaActiva === "mis_registros" ? "bg-[#0b7a33] text-white" : "text-[#40523a]"}`}>
+
+            <button
+              onClick={() => setVistaActiva("mis_registros")}
+              className={`w-full text-left rounded-2xl px-4 py-3 font-semibold ${
+                vistaActiva === "mis_registros" ? "bg-[#0b7a33] text-white" : "text-[#40523a]"
+              }`}
+            >
               Mis registros
             </button>
-            <button onClick={() => setVistaActiva("metas")} className={`w-full text-left rounded-2xl px-4 py-3 font-semibold ${vistaActiva === "metas" ? "bg-[#0b7a33] text-white" : "text-[#40523a]"}`}>
+
+            <button
+              onClick={() => setVistaActiva("metas")}
+              className={`w-full text-left rounded-2xl px-4 py-3 font-semibold ${
+                vistaActiva === "metas" ? "bg-[#0b7a33] text-white" : "text-[#40523a]"
+              }`}
+            >
               Metas
             </button>
-            <button onClick={() => setVistaActiva("exportar")} className={`w-full text-left rounded-2xl px-4 py-3 font-semibold ${vistaActiva === "exportar" ? "bg-[#0b7a33] text-white" : "text-[#40523a]"}`}>
+
+            <button
+              onClick={() => setVistaActiva("exportar")}
+              className={`w-full text-left rounded-2xl px-4 py-3 font-semibold ${
+                vistaActiva === "exportar" ? "bg-[#0b7a33] text-white" : "text-[#40523a]"
+              }`}
+            >
               Exportar Excel
             </button>
+
             {esJefe && (
-              <button onClick={() => setVistaActiva("panel_jefe")} className={`w-full text-left rounded-2xl px-4 py-3 font-semibold ${vistaActiva === "panel_jefe" ? "bg-[#0b7a33] text-white" : "text-[#40523a]"}`}>
+              <button
+                onClick={() => setVistaActiva("panel_jefe")}
+                className={`w-full text-left rounded-2xl px-4 py-3 font-semibold ${
+                  vistaActiva === "panel_jefe" ? "bg-[#0b7a33] text-white" : "text-[#40523a]"
+                }`}
+              >
                 Panel jefe
+              </button>
+            )}
+
+            {esAdmin && (
+              <button
+                onClick={() => setVistaActiva("admin")}
+                className={`w-full text-left rounded-2xl px-4 py-3 font-semibold ${
+                  vistaActiva === "admin" ? "bg-[#0b7a33] text-white" : "text-[#40523a]"
+                }`}
+              >
+                Administrador
               </button>
             )}
           </nav>
 
           <div className="mt-6 bg-[#fafcf8] rounded-3xl border border-[#dfe8d8] p-4 shadow-sm">
-            <p className="text-sm text-[#7a8c72]">Dinero acumulado</p>
-            <p className="text-4xl font-bold text-[#1f7a1f] mt-2">{formatMoney(totalDinero)}</p>
-          </div>
-
-          <div className="mt-4 bg-[#fafcf8] rounded-3xl border border-[#dfe8d8] p-4 shadow-sm">
-            <p className="text-sm text-[#7a8c72]">Nivel de aperturas</p>
-            <p className="text-3xl font-bold text-[#2f4f24] mt-2">{nivel.nombre}</p>
-            <div className="w-full h-4 bg-[#eef4ea] rounded-full mt-4 overflow-hidden">
-              <div className="h-full bg-[#39b11c]" style={{ width: `${Math.max(8, Math.min(100, nivel.progreso))}%` }} />
-            </div>
-            <p className="text-sm text-[#62725b] mt-3">{nivel.mensaje}</p>
+            <p className="text-sm text-[#7a8c72]">Usuario</p>
+            <p className="text-xl font-bold text-[#2f4f24] mt-2">{user.nombre}</p>
+            <p className="text-sm text-[#62725b] mt-1">
+              {user.codigo} · {user.rol}
+            </p>
           </div>
         </aside>
 
@@ -1039,14 +1269,17 @@ export default function Page() {
             <div className="flex flex-col xl:flex-row xl:items-center xl:justify-between gap-4">
               <div>
                 <h1 className="text-3xl md:text-4xl font-bold">Registremos Tu Apertura</h1>
-                <p className="text-white/80 mt-1">Ranking por aperturas y escaneo por separado</p>
+                <p className="text-white/80 mt-1">Acceso por código y PIN</p>
               </div>
 
               <div className="flex flex-wrap items-center gap-3">
-                <div className="bg-white/10 rounded-2xl px-4 py-2 font-semibold">{vendedorActivo}</div>
-                <div className="bg-white/10 rounded-2xl px-4 py-2 font-semibold">{nivel.nombre}</div>
+                <div className="bg-white/10 rounded-2xl px-4 py-2 font-semibold">{user.nombre}</div>
+                <div className="bg-white/10 rounded-2xl px-4 py-2 font-semibold">{user.codigo}</div>
                 <div className="bg-white/10 rounded-2xl px-4 py-2 font-semibold">{formatMoney(dineroHoy)}</div>
-                <button onClick={handleLogout} className="bg-white text-[#2f4f24] rounded-2xl px-5 py-2 font-semibold">
+                <button
+                  onClick={handleLogout}
+                  className="bg-white text-[#2f4f24] rounded-2xl px-5 py-2 font-semibold"
+                >
                   Salir
                 </button>
               </div>
@@ -1055,12 +1288,19 @@ export default function Page() {
 
           {errorVisible}
 
+          {mensaje && (
+            <div className="mx-4 md:mx-6 mt-4 bg-green-50 border border-green-200 text-green-700 rounded-2xl p-4">
+              {mensaje}
+            </div>
+          )}
+
           <div className="p-4 md:p-6 space-y-6">
             {vistaActiva === "dashboard" && renderDashboard()}
             {vistaActiva === "mis_registros" && renderMisRegistros()}
             {vistaActiva === "metas" && renderMetas()}
             {vistaActiva === "exportar" && renderExportar()}
-            {vistaActiva === "panel_jefe" && esJefe && renderPanelJefe()}
+            {vistaActiva === "panel_jefe" && renderPanelJefe()}
+            {vistaActiva === "admin" && renderAdmin()}
           </div>
 
           <footer className="text-center text-xs text-[#7a8c72] pb-6 px-4">
@@ -1071,17 +1311,46 @@ export default function Page() {
 
       <div className="lg:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-[#dfe8d8] px-2 py-2">
         <div className="grid grid-cols-4 gap-2 text-xs">
-          <button onClick={() => setVistaActiva("dashboard")} className={`rounded-xl px-2 py-3 font-semibold ${vistaActiva === "dashboard" ? "bg-[#0b7a33] text-white" : "bg-[#f5f7f3] text-[#40523a]"}`}>
+          <button
+            onClick={() => setVistaActiva("dashboard")}
+            className={`rounded-xl px-2 py-3 font-semibold ${
+              vistaActiva === "dashboard" ? "bg-[#0b7a33] text-white" : "bg-[#f5f7f3] text-[#40523a]"
+            }`}
+          >
             Inicio
           </button>
-          <button onClick={() => setVistaActiva("mis_registros")} className={`rounded-xl px-2 py-3 font-semibold ${vistaActiva === "mis_registros" ? "bg-[#0b7a33] text-white" : "bg-[#f5f7f3] text-[#40523a]"}`}>
+
+          <button
+            onClick={() => setVistaActiva("mis_registros")}
+            className={`rounded-xl px-2 py-3 font-semibold ${
+              vistaActiva === "mis_registros" ? "bg-[#0b7a33] text-white" : "bg-[#f5f7f3] text-[#40523a]"
+            }`}
+          >
             Registros
           </button>
-          <button onClick={() => setVistaActiva("metas")} className={`rounded-xl px-2 py-3 font-semibold ${vistaActiva === "metas" ? "bg-[#0b7a33] text-white" : "bg-[#f5f7f3] text-[#40523a]"}`}>
+
+          <button
+            onClick={() => setVistaActiva("metas")}
+            className={`rounded-xl px-2 py-3 font-semibold ${
+              vistaActiva === "metas" ? "bg-[#0b7a33] text-white" : "bg-[#f5f7f3] text-[#40523a]"
+            }`}
+          >
             Metas
           </button>
-          <button onClick={() => setVistaActiva(esJefe ? "panel_jefe" : "exportar")} className={`rounded-xl px-2 py-3 font-semibold ${(vistaActiva === "panel_jefe" || vistaActiva === "exportar") ? "bg-[#0b7a33] text-white" : "bg-[#f5f7f3] text-[#40523a]"}`}>
-            {esJefe ? "Jefe" : "Exportar"}
+
+          <button
+            onClick={() => {
+              if (esAdmin) setVistaActiva("admin");
+              else if (esJefe) setVistaActiva("panel_jefe");
+              else setVistaActiva("exportar");
+            }}
+            className={`rounded-xl px-2 py-3 font-semibold ${
+              vistaActiva === "panel_jefe" || vistaActiva === "exportar" || vistaActiva === "admin"
+                ? "bg-[#0b7a33] text-white"
+                : "bg-[#f5f7f3] text-[#40523a]"
+            }`}
+          >
+            {esAdmin ? "Admin" : esJefe ? "Jefe" : "Exportar"}
           </button>
         </div>
       </div>
